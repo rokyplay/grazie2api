@@ -1,0 +1,43 @@
+# grazie2api configuration
+# Copy to config.yaml and edit as needed.
+
+# ========== Accounts (optional) ==========
+# For browser-based OAuth login. Leave empty if adding credentials via API/paste.
+accounts: []
+  # - email: "your@email.com"
+  #   password: "your_password"
+
+# ========== Server ==========
+server:
+  host: "127.0.0.1"
+  port: 8800
+
+# ========== Credential rotation strategy ==========
+# round_robin: cycle through credentials
+# least_used: pick the one used least today
+# most_quota: pick the one with most remaining quota
+strategy: "round_robin"
+
+# ========== Usually no need to change below ==========
+
+auth:
+  client_id: "ide"
+  scope: "openid offline_access r_ide_auth"
+  code_challenge_method: "S256"
+
+tokens:
+  jwt_margin_seconds: 300
+  access_token_margin_seconds: 120
+
+credentials:
+  cooldown_seconds: 600
+
+quota:
+  refresh_interval_seconds: 300
+
+models:
+  profiles_cache_ttl_seconds: 3600
+  profile_exclude_keywords:
+    - "embedding"
+    - "instruct"
+  alias_overrides: {}
