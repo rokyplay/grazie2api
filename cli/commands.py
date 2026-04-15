@@ -174,7 +174,7 @@ def serve(args: argparse.Namespace, settings: Settings) -> None:
         sys.exit(1)
 
     state.settings = settings
-    state.api_key = args.api_key or os.environ.get("GRAZIE_API_KEY", "") or os.environ.get("JB_PROXY_API_KEY", "")
+    state.api_key = args.api_key or os.environ.get("GRAZIE_API_KEY", "") or os.environ.get("JB_PROXY_API_KEY", "") or settings.api_key
     state.strategy = args.strategy
 
     print("=" * 60)

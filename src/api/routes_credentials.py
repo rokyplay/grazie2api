@@ -68,17 +68,21 @@ def _parse_credential_blob(blob: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    # Try key=value format
-    kv_pattern = re.compile(r'^(\w+)\s*[=:]\s*(.+)', re.MULTILINE)
+    # Try key=value or "Key: value" format (supports multi-word keys like "License ID")
+    kv_pattern = re.compile(r'^([\w\s]+?)\s*[=:]\s*(.+)', re.MULTILINE)
     kv_matches = kv_pattern.findall(blob)
     if len(kv_matches) >= 2:
-        kv_map = {k.lower().strip(): v.strip().strip('"').strip("'") for k, v in kv_matches}
+        # Normalize keys: lowercase, replace spaces with underscore
+        kv_map = {k.lower().strip().replace(" ", "_"): v.strip().strip('"').strip("'") for k, v in kv_matches}
         result["jwt"] = kv_map.get("jwt") or kv_map.get("token") or kv_map.get("grazie_jwt") or ""
         result["refresh_token"] = kv_map.get("refresh_token") or kv_map.get("rt") or ""
         result["license_id"] = kv_map.get("license_id") or kv_map.get("licenseid") or ""
         result["id_token"] = kv_map.get("id_token") or ""
         result["user_email"] = kv_map.get("user_email") or kv_map.get("email") or ""
         result["label"] = kv_map.get("label") or kv_map.get("name") or ""
+        # Also pick up API Key and API Base from portal format
+        result["api_key"] = kv_map.get("api_key") or ""
+        result["api_base"] = kv_map.get("api_base") or ""
         if any(result.get(k) for k in ("jwt", "refresh_token", "license_id")):
             return result
 

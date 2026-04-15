@@ -40,6 +40,27 @@ async def fetch_quota_for(entry: "CredentialEntry", client: httpx.AsyncClient, s
             },
             json={},
         )
+        if resp.status_code == 401:
+            # JWT rejected by server — force refresh and retry once
+            log.warning("[cred %s] quota 401, forcing JWT refresh", entry.id)
+            entry.token_manager.jwt = ""
+            entry.token_manager.jwt_expires = 0
+            try:
+                jwt = await entry.token_manager.ensure_valid_jwt()
+                resp = await client.post(
+                    settings.urls.quota_url,
+                    headers={
+                        "grazie-authenticate-jwt": jwt,
+                        "grazie-agent": settings.grazie.agent_json,
+                        "User-Agent": "ktor-client",
+                        "Content-Type": "application/json",
+                    },
+                    json={},
+                )
+            except Exception as e2:
+                entry.last_error = f"quota 401 retry failed: {e2}"
+                log.warning("[cred %s] quota 401 retry failed: %s", entry.id, e2)
+                return None
         if resp.status_code != 200:
             entry.last_error = f"quota http {resp.status_code}"
             log.warning(

@@ -123,7 +123,10 @@ class Settings:
     models: ModelsConfig = field(default_factory=ModelsConfig)
     portal: PortalConfig = field(default_factory=PortalConfig)
     strategy: str = "round_robin"
+    api_key: str = ""  # If set, all endpoints require this key via Bearer token or x-api-key header
     accounts: list[dict] = field(default_factory=list)  # [{email, password}]
+    system_api_keys: list[dict] = field(default_factory=list)
+    # Format: [{"id": "system-rok", "identity": "rok", "key": "sk-xxx", "tier": "system", "enabled": true}]
 
     # Derived paths
     config_home: Path = field(default_factory=lambda: Path.home() / ".grazie2api")
@@ -136,6 +139,10 @@ class Settings:
     @property
     def quota_cache_file(self) -> Path:
         return self.config_home / "quota-cache.json"
+
+    @property
+    def main_db_file(self) -> Path:
+        return self.config_home / "main.db"
 
     @property
     def stats_db_file(self) -> Path:

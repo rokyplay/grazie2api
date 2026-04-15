@@ -54,14 +54,11 @@ def map_jb_error(status: int, body: bytes, settings: Settings, entry: "Credentia
     return f"Grazie AI error {status}: {text}"
 
 
-async def prepare_jb_request(
+def build_jb_body_and_headers(
     model: str,
     jb_messages: list[dict],
+    jwt: str,
     settings: Settings,
-    http_client: httpx.AsyncClient,
-    pool: "CredentialPool",
-    stats: "StatsRecorder | None",
-    strategy: str,
     tools: list[dict] | None = None,
     *,
     temperature: float | None = None,
@@ -69,25 +66,13 @@ async def prepare_jb_request(
     max_tokens: int | None = None,
     stop: list[str] | str | None = None,
     reasoning_effort: str | None = None,
-) -> tuple[dict, dict, str, "CredentialEntry"]:
-    """Build request body + headers, get JWT.
+) -> tuple[dict, dict, str]:
+    """Build Grazie request body + headers from a pre-obtained JWT.
 
-    Returns (jb_body, jb_headers, request_id, credential_entry).
+    Returns (jb_body, jb_headers, request_id).
+    This is the pure body-builder extracted from prepare_jb_request
+    so it can be reused by both global-pool and per-user paths.
     """
-    entry = await pool.pick(strategy, stats)
-    try:
-        jwt = await entry.token_manager.ensure_valid_jwt()
-    except httpx.HTTPStatusError as e:
-        log.error(
-            "[cred %s] Token refresh failed: %s %s",
-            entry.id, e.response.status_code, redact_log(e.response.text[:500]),
-        )
-        entry.mark_cooldown(60, f"token refresh http {e.response.status_code}")
-        raise HTTPException(
-            status_code=502,
-            detail={"error": {"message": "Token refresh failed", "type": "upstream_error"}},
-        )
-
     jb_body: dict[str, Any] = {
         "prompt": settings.grazie.chat_prompt,
         "profile": model,
@@ -98,22 +83,31 @@ async def prepare_jb_request(
 
     # Tools injection (paired format: fqdn entry + value entry)
     if tools:
-        tool_defs = [t["function"] for t in tools if "function" in t]
+        tool_defs = []
+        for t in tools:
+            if "function" not in t:
+                continue
+            fn = dict(t["function"])
+            if fn.get("parameters") is None:
+                fn["parameters"] = {"type": "object", "properties": {}}
+            tool_defs.append(fn)
         if tool_defs:
             param_data.append({"type": "json", "fqdn": "llm.parameters.functions"})
             param_data.append({"type": "json", "value": json.dumps(tool_defs)})
             log.info("Injecting %d tool definitions", len(tool_defs))
 
     # Sampling parameters: temperature and top_p are mutually exclusive
-    # Some models reject both simultaneously — send only one.
-    has_temp = temperature is not None
-    has_top_p = top_p is not None
-    if has_temp:
-        param_data.append({"type": "double", "fqdn": "llm.parameters.temperature"})
-        param_data.append({"type": "double", "value": str(temperature)})
-    elif has_top_p:
-        param_data.append({"type": "double", "fqdn": "llm.parameters.top-p"})
-        param_data.append({"type": "double", "value": str(top_p)})
+    # OpenAI provider models reject temperature/top_p (400 "not supported for chat OpenAI provider")
+    is_openai_provider = model.lower().startswith("openai-")
+    if not is_openai_provider:
+        has_temp = temperature is not None
+        has_top_p = top_p is not None
+        if has_temp:
+            param_data.append({"type": "double", "fqdn": "llm.parameters.temperature"})
+            param_data.append({"type": "double", "value": str(temperature)})
+        elif has_top_p:
+            param_data.append({"type": "double", "fqdn": "llm.parameters.top-p"})
+            param_data.append({"type": "double", "value": str(top_p)})
 
     # reasoning-effort only for thinking models (o3/o4 etc), others will 400
     if reasoning_effort and re.search(r'o[34]|thinking', model, re.IGNORECASE):
@@ -133,6 +127,48 @@ async def prepare_jb_request(
         "Content-Type": "application/json",
     }
     request_id = uuid.uuid4().hex[:24]
+    return jb_body, jb_headers, request_id
+
+
+async def prepare_jb_request(
+    model: str,
+    jb_messages: list[dict],
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+    pool: "CredentialPool",
+    stats: "StatsRecorder | None",
+    strategy: str,
+    tools: list[dict] | None = None,
+    *,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    max_tokens: int | None = None,
+    stop: list[str] | str | None = None,
+    reasoning_effort: str | None = None,
+) -> tuple[dict, dict, str, "CredentialEntry"]:
+    """Build request body + headers via global pool, get JWT.
+
+    Returns (jb_body, jb_headers, request_id, credential_entry).
+    """
+    entry = await pool.pick(strategy, stats)
+    try:
+        jwt = await entry.token_manager.ensure_valid_jwt()
+    except httpx.HTTPStatusError as e:
+        log.error(
+            "[cred %s] Token refresh failed: %s %s",
+            entry.id, e.response.status_code, redact_log(e.response.text[:500]),
+        )
+        entry.mark_cooldown(60, f"token refresh http {e.response.status_code}")
+        raise HTTPException(
+            status_code=502,
+            detail={"error": {"message": "Token refresh failed", "type": "upstream_error"}},
+        )
+
+    jb_body, jb_headers, request_id = build_jb_body_and_headers(
+        model, jb_messages, jwt, settings,
+        tools=tools, temperature=temperature, top_p=top_p,
+        max_tokens=max_tokens, stop=stop, reasoning_effort=reasoning_effort,
+    )
     return jb_body, jb_headers, request_id, entry
 
 

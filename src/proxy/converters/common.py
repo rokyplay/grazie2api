@@ -142,13 +142,22 @@ def strip_trailing_assistant(messages: list[dict]) -> list[dict]:
             last["type"] = "user_message"
             last["content"] = f"[Continue from here:] {content.strip()}"
 
-    # function_message cannot be last (Grazie requires user_message at the end)
+    # function_message at the end: only convert if it's orphaned (no preceding functionCall)
+    # If it's a valid tool result following a functionCall, keep it — Grazie needs it
     if messages and messages[-1].get("type") == "function_message":
-        fn_last = messages[-1]
-        fn_last["type"] = "user_message"
-        fn_content = fn_last.get("content", "")
-        fn_last["content"] = fn_content or "[Continue]"
-        fn_last.pop("functionName", None)
+        has_call = False
+        for j in range(len(messages) - 2, -1, -1):
+            if messages[j].get("type") == "assistant_message" and messages[j].get("functionCall"):
+                has_call = True
+                break
+            if messages[j].get("type") != "function_message":
+                break
+        if not has_call:
+            fn_last = messages[-1]
+            fn_last["type"] = "user_message"
+            fn_content = fn_last.get("content", "")
+            fn_last["content"] = fn_content or "[Continue]"
+            fn_last.pop("functionName", None)
 
     return messages
 
@@ -186,18 +195,40 @@ def sanitize_jb_messages(raw: list[dict]) -> list[dict]:
                 continue
         pass1.append(msg)
 
-    # Pass 2: assistant with functionCall but no following function_message -> strip functionCall
+    # Pass 2: Grazie requires strict alternation: assistant(fc) → fn → assistant(fc) → fn
+    # OpenAI format: assistant(tc1,tc2) → tool1 → tool2
+    # After openai_msgs_to_jb: assistant(fc1) → assistant(fc2) → fn1 → fn2
+    # Must interleave to: assistant(fc1) → fn1 → assistant(fc2) → fn2
     out: list[dict] = []
-    for i, msg in enumerate(pass1):
+    i = 0
+    while i < len(pass1):
+        msg = pass1[i]
         if msg.get("type") == "assistant_message" and msg.get("functionCall"):
-            next_msg = pass1[i + 1] if i + 1 < len(pass1) else None
-            if not next_msg or next_msg.get("type") != "function_message":
-                out.append({
-                    "type": "assistant_message",
-                    "content": msg.get("content") or "[tool call removed]",
-                })
-                continue
-        out.append(msg)
+            calls: list[dict] = []
+            j = i
+            while j < len(pass1) and pass1[j].get("type") == "assistant_message" and pass1[j].get("functionCall"):
+                calls.append(pass1[j])
+                j += 1
+            fns: list[dict] = []
+            k = j
+            while k < len(pass1) and pass1[k].get("type") == "function_message":
+                fns.append(pass1[k])
+                k += 1
+            if len(fns) >= len(calls):
+                for idx in range(len(calls)):
+                    out.append(calls[idx])
+                    out.append(fns[idx])
+                for idx in range(len(calls), len(fns)):
+                    out.append(fns[idx])
+            else:
+                for c in calls:
+                    out.append({"type": "assistant_message", "content": c.get("content") or "[tool call removed]"})
+                for fn in fns:
+                    out.append(fn)
+            i = k
+        else:
+            out.append(msg)
+            i += 1
 
     strip_trailing_assistant(out)
     return out
